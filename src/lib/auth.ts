@@ -1,10 +1,10 @@
+import { config } from "../../config";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 // If your Prisma file is located elsewhere, you can change the path
 import { prisma } from "../config/prisma";
 import { admin } from "better-auth/plugins";
 import { createAccessControl } from "better-auth/plugins/access";
-import { adminAc } from "better-auth/plugins/admin/access";
 
 const accessControl = createAccessControl({
   user: [
@@ -22,7 +22,18 @@ const accessControl = createAccessControl({
 });
 
 const owner = accessControl.newRole({
-  ...adminAc.statements,
+  user: [
+    "create",
+    "list",
+    "set-role",
+    "ban",
+    "delete",
+    "impersonate",
+    "impersonate-admins",
+    "set-password",
+    "get",
+    "update",
+  ],
 });
 
 const karyawan = accessControl.newRole({
@@ -30,6 +41,9 @@ const karyawan = accessControl.newRole({
 });
 
 export const auth = betterAuth({
+  baseURL: config.BETTER_AUTH_URL,
+  secret: config.BETTER_AUTH_SECRET,
+  trustedOrigins: [config.CLIENT_ORIGIN],
   database: prismaAdapter(prisma, {
     provider: "mysql", // or "mysql", "postgresql", ...etc
   }),
@@ -50,6 +64,20 @@ export const auth = betterAuth({
     autoSignIn: false,
   },
 
+  advanced: {
+    useSecureCookies: process.env.NODE_ENV === "production",
+
+    crossSubDomainCookies: {
+      enabled: process.env.NODE_ENV === "production",
+      domain: config.COOKIE_DOMAIN,
+    },
+
+    defaultCookieAttributes: {
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      secure: process.env.NODE_ENV === "production",
+    },
+  },
+
   session: {
     expiresIn: 60 * 60 * 24,
     updateAge: 60 * 60 * 6,
@@ -57,6 +85,4 @@ export const auth = betterAuth({
       enabled: true,
     },
   },
-
-  trustedOrigins: ["http://localhost:3000", "http://localhost:4000"],
 });

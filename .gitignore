@@ -1,4 +1,10 @@
 node_modules/*
 /generated/prisma
 .env
+.env.*
+/dist/
 
+SALES_API_DOCS.md
+TECHNICAL_NOTES.ts
+TESTING_EXAMPLES.ts
+SALES_IMPLEMENTATION_SUMMARY.md
