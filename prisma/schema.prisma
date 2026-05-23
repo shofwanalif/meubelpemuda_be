@@ -28,6 +28,10 @@ model User {
   banReason  String?   @db.Text
   banExpires DateTime?
 
+  employeeBranch EmployeeBranch?
+  sales          Sale[]
+  priceUpdates   ProductPrice[]  @relation("UpdatedBy")
+
   @@unique([email])
   @@map("user")
 }
@@ -80,4 +84,111 @@ model Verification {
 
   @@index([identifier(length: 191)])
   @@map("verification")
+}
+
+// =============================================================
+// TABEL KUSTOM APLIKASI
+// =============================================================
+
+model Branch {
+  id        String   @id @default(cuid())
+  name      String
+  address   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  employeeBranches EmployeeBranch[]
+  productPrices    ProductPrice[]
+  sales            Sale[]
+
+  @@map("branch")
+}
+
+// Tabel pivot: karyawan <-> cabang (1 karyawan, 1 cabang aktif)
+model EmployeeBranch {
+  id         String   @id @default(cuid())
+  assignedAt DateTime @default(now())
+
+  userId   String @unique // unique: 1 karyawan hanya boleh di 1 cabang
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
+
+  @@map("employee_branch")
+}
+
+model Product {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  unit        String    @default("pcs") // pcs, set, unit, dll
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  // Relations
+  prices    ProductPrice[]
+  saleItems SaleItem[]
+
+  @@map("product")
+}
+
+// Harga per cabang dengan riwayat perubahan
+// branchId nullable = harga global (fallback jika cabang tidak punya harga sendiri)
+model ProductPrice {
+  id            String   @id @default(cuid())
+  costPrice     Decimal  @db.Decimal(15, 2) // harga modal
+  sellPrice     Decimal  @db.Decimal(15, 2) // harga jual
+  effectiveFrom DateTime @default(now()) // diisi otomatis sistem, bukan user
+  createdAt     DateTime @default(now())
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  branchId String? // null = harga global
+  branch   Branch? @relation(fields: [branchId], references: [id])
+
+  updatedById String
+  updatedBy   User   @relation("UpdatedBy", fields: [updatedById], references: [id])
+
+  @@map("product_price")
+}
+
+// Header transaksi penjualan (1 nota)
+model Sale {
+  id        String   @id @default(cuid())
+  saleDate  DateTime @default(now())
+  notes     String?
+  createdAt DateTime @default(now())
+
+  branchId    String
+  branch      Branch @relation(fields: [branchId], references: [id])
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id])
+
+  // Relations
+  items SaleItem[]
+
+  @@map("sale")
+}
+
+// Detail item per transaksi - harga di-snapshot saat transaksi
+model SaleItem {
+  id                String  @id @default(cuid())
+  qty               Decimal @db.Decimal(10, 2)
+  sellPriceSnapshot Decimal @db.Decimal(15, 2) // harga jual saat transaksi
+  costPriceSnapshot Decimal @db.Decimal(15, 2) // harga modal saat transaksi
+  totalSell         Decimal @db.Decimal(15, 2) // sellPriceSnapshot * qty
+  grossProfit       Decimal @db.Decimal(15, 2) // (sellPrice - costPrice) * qty
+
+  saleId String
+  sale   Sale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  @@map("sale_item")
 }

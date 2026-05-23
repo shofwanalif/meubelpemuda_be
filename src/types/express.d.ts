@@ -25,6 +25,20 @@ declare global {
           impersonatedBy?: string | null;
         };
       } | null;
+      employeeBranch?: {
+        id: string;
+        assignedAt: Date;
+        userId: string;
+        branchId: string;
+        branch: {
+          id: string;
+          name: string;
+          address: string | null;
+          isActive: boolean;
+          createdAt: Date;
+          updatedAt: Date;
+        };
+      };
     }
   }
 }
