@@ -5,6 +5,8 @@ import {
   requireRole,
   requireAssignedBranchForKaryawan,
 } from "../../middleware/auth.middleware";
+import { validate } from "../../middleware/validation.middleware";
+import { CreateProductSchema, UpdateProductSchema } from "./product.schema";
 
 const productRouter = Router();
 
@@ -20,38 +22,42 @@ productRouter.post(
   "/create",
   authenticate,
   requireRole(["owner", "karyawan"]),
-  requireAssignedBranchForKaryawan, // tolak karyawan yg belum di-assign cabang
+  requireAssignedBranchForKaryawan,
+  validate(CreateProductSchema),
   productController.createProduct,
 );
 
-productRouter.put(
+productRouter.patch(
   "/update/:id",
   authenticate,
   requireRole(["owner", "karyawan"]),
   requireAssignedBranchForKaryawan,
+  validate(UpdateProductSchema),
   productController.updateProduct,
 );
 
 productRouter.delete(
   "/delete/:id",
   authenticate,
-  requireRole(["owner"]),
+  requireRole(["owner", "karyawan"]),
+  requireAssignedBranchForKaryawan,
   productController.deleteProduct,
 );
 
-productRouter.patch(
-  "/deactivate/:id",
-  authenticate,
-  requireRole(["owner"]),
-  productController.deactivateProduct,
-);
+// productRouter.patch(
+//   "/deactivate/:id",
+//   authenticate,
+//   requireRole(["owner"]),
+//   validate(UpdateProductSchema),
+//   productController.deactivateProduct,
+// );
 
-productRouter.patch(
-  "/activate/:id",
-  authenticate,
-  requireRole(["owner"]),
-  productController.activateProduct,
-);
+// productRouter.patch(
+//   "/activate/:id",
+//   authenticate,
+//   requireRole(["owner"]),
+//   productController.activateProduct,
+// );
 
 // productRouter.get(
 //   "/:id",

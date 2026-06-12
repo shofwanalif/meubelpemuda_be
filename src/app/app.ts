@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import { config } from "../../config";
 import { morganMiddleware } from "../config/morganMiddleware";
+import { errorHandler } from "../middleware/errorhandler";
 import { auth } from "../lib/auth";
 import { toNodeHandler } from "better-auth/node";
 import { authenticate } from "../middleware/auth.middleware";
@@ -9,6 +10,7 @@ import branchRouter from "./branches/branch.route";
 import userRouter from "./user/user.route";
 import productRouter from "./product/product.route";
 import { salesRouter } from "./sales/sales.route";
+import categoryRouter from "./categories/category.route";
 
 export const app = express();
 
@@ -50,3 +52,6 @@ app.use("/api/branches", branchRouter);
 app.use("/api/users", userRouter);
 app.use("/api/products", productRouter);
 app.use("/api/sales", salesRouter);
+app.use("/api/categories", categoryRouter);
+
+app.use(errorHandler);
