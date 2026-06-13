@@ -1,5 +1,6 @@
 import { auth } from "../../lib/auth";
 import { prisma } from "../../config/prisma";
+import { NotFoundError } from "../../helper/errors";
 
 interface CreateUserDtoType {
   email: string;
@@ -27,16 +28,6 @@ export const userService = {
       }
     }
 
-    // const user = await auth.api.createUser({
-    //   body: {
-    //     name: data.name,
-    //     email: data.email,
-    //     password: data.password,
-    //     data: {
-    //       branchId: data.branchId,
-    //     },
-    //   },
-    // });
     const created = await auth.api.createUser({
       body: {
         name: data.name,
@@ -62,39 +53,6 @@ export const userService = {
       await prisma.user.delete({ where: { id: created.user.id } });
       throw error;
     }
-
-    // Buat EmployeeBranch jika user adalah karyawan dan ada branchId
-    //   if (role === "karyawan" && data.branchId) {
-    //     await prisma.employeeBranch.create({
-    //       data: {
-    //         userId: created.user.id,
-    //         branchId: data.branchId,
-    //       },
-    //     });
-    //   }
-
-    //   return user;
-    // },
-
-    // async assignBranch(userId: string, branchId: string) {
-    //   // Cek apakah user sudah memiliki relasi dengan branch
-    //   const alreadyAssigned = await prisma.employeeBranch.findUnique({
-    //     where: {
-    //       userId,
-    //     },
-    //   });
-
-    //   if (alreadyAssigned) {
-    //     return alreadyAssigned;
-    //   }
-
-    //   return await prisma.employeeBranch.create({
-    //     data: {
-    //       userId,
-    //       branchId,
-    //     },
-    //   });
-    // },
   },
 
   async assignBranch(userId: string, branchId: string) {
@@ -106,9 +64,10 @@ export const userService = {
   },
 
   async getListUsers() {
-    return prisma.user.findMany({
+    const users = await prisma.user.findMany({
       where: {
         role: "karyawan",
+        deletedAt: null,
       },
       include: {
         employeeBranch: {
@@ -123,5 +82,80 @@ export const userService = {
         },
       },
     });
+
+    return users.map((user) => {
+      if (user.employeeBranch) {
+        const { userId, branchId, ...employeeBranchWithoutIds } =
+          user.employeeBranch;
+        return {
+          ...user,
+          employeeBranch: employeeBranchWithoutIds,
+        };
+      }
+      return user;
+    });
+  },
+
+  async updateUser(id: string, data: Partial<CreateUserDtoType>) {
+    const { name, email, role, branchId } = data;
+
+    if (branchId) {
+      const branch = await prisma.branch.findUnique({
+        where: { id: branchId },
+      });
+      if (!branch) {
+        throw new Error("branch tidak ditemukan");
+      }
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: id },
+      data: {
+        name: name,
+        email: email,
+        role: role,
+      },
+    });
+
+    return updatedUser;
+  },
+
+  async deleteUser(id: string) {
+    const existingUser = await prisma.user.findUnique({
+      where: { id, deletedAt: null },
+      select: { id: true, deletedAt: true },
+    });
+
+    if (!existingUser) {
+      throw new NotFoundError("User tidak ditemukan");
+    }
+
+    if (existingUser.deletedAt) {
+      throw new Error("User sudah dihapus sebelumnya");
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        deletedAt: true,
+      },
+    });
+
+    // await auth.api.revokeUserSessions({
+    //   body: {
+    //     userId: id,
+    //   },
+    // });
+
+    return {
+      success: true,
+      message: "User berhasil dinonaktifkan (soft delete)",
+      data: updatedUser,
+    };
   },
 };

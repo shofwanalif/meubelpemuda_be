@@ -25,4 +25,18 @@ userRouter.get(
   userController.getListUsers,
 );
 
+userRouter.patch(
+  "/update-user/:id",
+  authenticate,
+  requireRole(["owner"]),
+  userController.updateUser,
+);
+
+userRouter.delete(
+  "/delete-user/:id",
+  authenticate,
+  requireRole(["owner"]),
+  userController.deleteUser,
+);
+
 export default userRouter;

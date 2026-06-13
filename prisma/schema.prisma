@@ -1,8 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client"
   output   = "../generated/prisma"
@@ -31,6 +26,8 @@ model User {
   employeeBranch EmployeeBranch?
   sales          Sale[]
   priceUpdates   ProductPrice[]  @relation("UpdatedBy")
+
+  deletedAt     DateTime?  
 
   @@unique([email])
   @@map("user")
@@ -90,46 +87,72 @@ model Verification {
 // TABEL KUSTOM APLIKASI
 // =============================================================
 
-model Branch {
+  model Branch {
+    id        String   @id @default(cuid())
+    name      String
+    address   String?
+    isActive  Boolean  @default(true)
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+    deletedAt DateTime?
+
+    // Relations
+    employeeBranches EmployeeBranch[]
+    // productPrices    ProductPrice[]
+    categories       Category[]
+    products         Product[]
+    sales            Sale[]
+
+    @@map("branch")
+  }
+
+  // Tabel pivot: karyawan <-> cabang (1 karyawan, 1 cabang aktif)
+  model EmployeeBranch {
+    id         String   @id @default(cuid())
+    assignedAt DateTime @default(now())
+
+    userId   String @unique // unique: 1 karyawan hanya boleh di 1 cabang
+    user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+    branchId String
+    branch   Branch @relation(fields: [branchId], references: [id])
+
+    @@map("employee_branch")
+  }
+
+model Category {
   id        String   @id @default(cuid())
   name      String
-  address   String?
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  deletedAt DateTime?
 
-  // Relations
-  employeeBranches EmployeeBranch[]
-  productPrices    ProductPrice[]
-  sales            Sale[]
-
-  @@map("branch")
-}
-
-// Tabel pivot: karyawan <-> cabang (1 karyawan, 1 cabang aktif)
-model EmployeeBranch {
-  id         String   @id @default(cuid())
-  assignedAt DateTime @default(now())
-
-  userId   String @unique // unique: 1 karyawan hanya boleh di 1 cabang
-  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   branchId String
   branch   Branch @relation(fields: [branchId], references: [id])
 
-  @@map("employee_branch")
+  products Product[]
+
+  @@map("category")
 }
 
 model Product {
   id          String    @id @default(cuid())
   name        String
   description String?
-  unit        String    @default("pcs") // pcs, set, unit, dll
+  // unit        String    @default("pcs") // pcs, set, unit, dll
+  stock       Int       @default(0)
   isActive    Boolean   @default(true)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  // Relations
+  branchId    String
+  branch      Branch @relation(fields: [branchId], references: [id])
+
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id])
+
+  
   prices    ProductPrice[]
   saleItems SaleItem[]
 
@@ -148,9 +171,6 @@ model ProductPrice {
   productId String
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  branchId String? // null = harga global
-  branch   Branch? @relation(fields: [branchId], references: [id])
-
   updatedById String
   updatedBy   User   @relation("UpdatedBy", fields: [updatedById], references: [id])
 
@@ -158,11 +178,17 @@ model ProductPrice {
 }
 
 // Header transaksi penjualan (1 nota)
+enum SaleStatus {
+  COMPLETED
+  CANCELLED
+}
+
 model Sale {
-  id        String   @id @default(cuid())
-  saleDate  DateTime @default(now())
+  id        String     @id @default(cuid())
+  saleDate  DateTime   @default(now())
+  status    SaleStatus @default(COMPLETED)
   notes     String?
-  createdAt DateTime @default(now())
+  createdAt DateTime   @default(now())
 
   branchId    String
   branch      Branch @relation(fields: [branchId], references: [id])
@@ -178,7 +204,7 @@ model Sale {
 // Detail item per transaksi - harga di-snapshot saat transaksi
 model SaleItem {
   id                String  @id @default(cuid())
-  qty               Decimal @db.Decimal(10, 2)
+  qty               Int     
   sellPriceSnapshot Decimal @db.Decimal(15, 2) // harga jual saat transaksi
   costPriceSnapshot Decimal @db.Decimal(15, 2) // harga modal saat transaksi
   totalSell         Decimal @db.Decimal(15, 2) // sellPriceSnapshot * qty

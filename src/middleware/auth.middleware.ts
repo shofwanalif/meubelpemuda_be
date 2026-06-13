@@ -1,9 +1,14 @@
 import { fromNodeHeaders } from "better-auth/node";
+import type { NextFunction, Request, Response } from "express";
 import { auth } from "../lib/auth";
 import { logger } from "better-auth";
 import { prisma } from "../config/prisma";
 
-export const authenticate = async (req: any, res: any, next: any) => {
+export const authenticate = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const session = await auth.api.getSession({
       headers: fromNodeHeaders(req.headers),
@@ -32,9 +37,9 @@ export const requireRole = (role: string[]) => {
 };
 
 export const requireAssignedBranchForKaryawan = async (
-  req: any,
-  res: any,
-  next: any,
+  req: Request,
+  res: Response,
+  next: NextFunction,
 ) => {
   try {
     const user = req.session?.user;
@@ -56,12 +61,10 @@ export const requireAssignedBranchForKaryawan = async (
 
     // opsional: simpan supaya handler berikutnya tidak query ulang
     req.employeeBranch = employeeBranch;
+    req.activeBranchId = employeeBranch.branchId;
 
     next();
   } catch (error) {
-    logger.error("Branch assignment check error", {
-      message: (error as Error).message,
-    });
-    res.status(500).json({ message: "Internal Server Error" });
+    next(error);
   }
 };
