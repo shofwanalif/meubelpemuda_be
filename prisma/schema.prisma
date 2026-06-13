@@ -190,6 +190,11 @@ model Sale {
   notes     String?
   createdAt DateTime   @default(now())
 
+  // data pelanggan
+  customerName    String?
+  customerAddress String?
+  customerPhone   String?
+
   branchId    String
   branch      Branch @relation(fields: [branchId], references: [id])
   createdById String
@@ -206,6 +211,7 @@ model SaleItem {
   id                String  @id @default(cuid())
   qty               Int     
   sellPriceSnapshot Decimal @db.Decimal(15, 2) // harga jual saat transaksi
+  discountAmount    Decimal? @default(0) @db.Decimal(15, 2) 
   costPriceSnapshot Decimal @db.Decimal(15, 2) // harga modal saat transaksi
   totalSell         Decimal @db.Decimal(15, 2) // sellPriceSnapshot * qty
   grossProfit       Decimal @db.Decimal(15, 2) // (sellPrice - costPrice) * qty

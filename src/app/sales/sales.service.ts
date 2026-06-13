@@ -1,492 +1,443 @@
 import { prisma } from "../../config/prisma";
 import { Decimal } from "../../../generated/prisma/internal/prismaNamespace";
 import {
-  KaryawanCreateSaleInput,
-  OwnerCreateSaleInput,
-  SaleItemInput,
+  CreateSaleDTO,
+  GetSalesQueryDTO,
+  GetSalesSummaryQueryDTO,
+  GetSalesSummaryMonthlyQueryDTO,
 } from "./sales.schema";
-import { meta } from "zod/v4/core";
-
-// ============================================================
-// TYPES
-// ============================================================
-
-type CreateSaleInput = {
-  branchId: string;
-  items: SaleItemInput[];
-  notes?: string | null;
-};
-
-type GetSalesFilter = {
-  branchId?: string;
-  startDate?: Date;
-  endDate?: Date;
-  page: number;
-  limit: number;
-};
-
-// ============================================================
-// HELPER: Get current product price at branch or global
-// ============================================================
-
-async function getCurrentProductPrice(
-  productId: string,
-  branchId: string,
-  tx: any, // Prisma transaction client
-) {
-  // Try to get branch-specific price first
-  const branchPrice = await tx.productPrice.findFirst({
-    where: {
-      productId,
-      branchId,
-      effectiveFrom: { lte: new Date() },
-    },
-    orderBy: { effectiveFrom: "desc" },
-  });
-
-  if (branchPrice) {
-    return {
-      costPrice: branchPrice.costPrice,
-      sellPrice: branchPrice.sellPrice,
-    };
-  }
-
-  // Fall back to global price (branchId = null)
-  const globalPrice = await tx.productPrice.findFirst({
-    where: {
-      productId,
-      branchId: null,
-      effectiveFrom: { lte: new Date() },
-    },
-    orderBy: { effectiveFrom: "desc" },
-  });
-
-  if (globalPrice) {
-    return {
-      costPrice: globalPrice.costPrice,
-      sellPrice: globalPrice.sellPrice,
-    };
-  }
-
-  throw new Error(`Harga untuk produk ${productId} tidak ditemukan`);
-}
-
-// HELPER: Validate user authorization for branch
-
-async function validateUserBranchAccess(
-  userId: string,
-  branchId: string,
-  userRole: string,
-  tx: any, // Prisma transaction client
-) {
-  // Owner bisa input penjualan di cabang manapun
-  if (userRole === "owner") {
-    return;
-  }
-
-  // Karyawan hanya bisa input di cabang mereka sendiri
-  if (userRole === "karyawan") {
-    const employeeBranch = await tx.employeeBranch.findUnique({
-      where: { userId },
-    });
-
-    if (!employeeBranch) {
-      throw new Error("Karyawan belum di-assign ke cabang");
-    }
-
-    if (employeeBranch.branchId !== branchId) {
-      throw new Error(
-        "Karyawan tidak memiliki akses untuk input penjualan di cabang ini",
-      );
-    }
-  }
-}
+import {
+  NotFoundError,
+  BadRequestError,
+  ForbiddenError,
+} from "../../helper/errors";
 
 export const salesService = {
-  async createSale(input: CreateSaleInput, userId: string, userRole: string) {
+  async createSale(data: CreateSaleDTO, branchId: string, userId: string) {
     return prisma.$transaction(async (tx) => {
-      // 1. Validate user has access to this branch
-      await validateUserBranchAccess(userId, input.branchId, userRole, tx);
-
-      // 2. Validate branch exists
+      // 1. Validasi branch
       const branch = await tx.branch.findUnique({
-        where: { id: input.branchId },
+        where: { id: branchId, deletedAt: null },
       });
+      if (!branch) throw new NotFoundError("Cabang tidak ditemukan");
 
-      if (!branch) {
-        throw new Error("Cabang tidak ditemukan");
-      }
-
-      // 3. Validate all products exist and get current prices
-      const productPrices: Record<
-        string,
-        { costPrice: Decimal; sellPrice: Decimal }
-      > = {};
-
-      for (const item of input.items) {
-        const product = await tx.product.findUnique({
-          where: { id: item.productId, deletedAt: null },
-        });
-
-        if (!product) {
-          throw new Error(`Produk dengan ID ${item.productId} tidak ditemukan`);
-        }
-
-        const price = await getCurrentProductPrice(
-          item.productId,
-          input.branchId,
-          tx,
-        );
-
-        productPrices[item.productId] = price;
-      }
-
-      // 4. Create Sale header (transaksi utama)
-      const sale = await tx.sale.create({
-        data: {
-          branchId: input.branchId,
-          createdById: userId,
-          notes: input.notes ?? null,
-          saleDate: new Date(),
+      // 2. Batch fetch semua produk sekaligus — hindari N+1
+      const productIds = data.items.map((item) => item.productId);
+      const products = await tx.product.findMany({
+        where: {
+          id: { in: productIds },
+          branchId,
+          deletedAt: null,
+        },
+        include: {
+          prices: {
+            orderBy: { effectiveFrom: "desc" },
+            take: 1,
+          },
         },
       });
 
-      // 5. Create Sale Items dengan harga snapshot dan gross profit
-      const saleItems = input.items.map((item) => {
-        const price = productPrices[item.productId];
-        const costPrice = price!.costPrice;
-        const sellPrice = price!.sellPrice;
-        const qty = item.qty;
+      // 3. Pastikan semua produk ditemukan
+      if (products.length !== productIds.length) {
+        const foundIds = products.map((p) => p.id);
+        const missingIds = productIds.filter((id) => !foundIds.includes(id));
+        throw new NotFoundError(
+          `Produk tidak ditemukan: ${missingIds.join(", ")}`,
+        );
+      }
 
-        // Calculate gross profit: (sellPrice - costPrice) * qty
-        const grossProfit = sellPrice.minus(costPrice).times(qty);
+      // 4. Map produk by id untuk akses cepat
+      const productMap = new Map(products.map((p) => [p.id, p]));
 
-        const totalSell = sellPrice.times(item.qty);
+      // 5. Validasi stok dan diskon
+      for (const item of data.items) {
+        const product = productMap.get(item.productId)!;
+
+        if (product.stock < item.qty) {
+          throw new BadRequestError(
+            `Stok produk "${product.name}" tidak cukup. Stok tersedia: ${product.stock}`,
+          );
+        }
+
+        if (product.prices.length === 0) {
+          throw new BadRequestError(
+            `Produk "${product.name}" belum memiliki harga`,
+          );
+        }
+
+        // validasi diskon tidak melebihi total harga item
+        if (item.discountAmount) {
+          const activePrice = product.prices[0];
+          const totalBeforeDiscount = activePrice!.sellPrice.times(item.qty);
+          if (
+            new Decimal(item.discountAmount).greaterThan(totalBeforeDiscount)
+          ) {
+            throw new BadRequestError(
+              `Diskon produk "${product.name}" melebihi total harga item`,
+            );
+          }
+        }
+      }
+
+      const sale = await tx.sale.create({
+        data: {
+          branchId,
+          createdById: userId,
+          notes: data.notes ?? null,
+          saleDate: new Date(),
+          customerName: data.customerName,
+          customerAddress: data.customerAddress,
+          customerPhone: data.customerPhone,
+        },
+      });
+
+      // 7. Mapping saleItems
+      const saleItemsData = data.items.map((item) => {
+        const product = productMap.get(item.productId)!;
+        const activePrice = product.prices[0];
+
+        const sellPrice = activePrice!.sellPrice;
+        const costPrice = activePrice!.costPrice;
+        const qty = new Decimal(item.qty);
+        const discountAmount = new Decimal(item.discountAmount ?? 0);
+
+        const totalSell = sellPrice.times(qty).minus(discountAmount);
+        const grossProfit = totalSell.minus(costPrice.times(qty));
 
         return {
           saleId: sale.id,
           productId: item.productId,
-          qty,
+          qty: item.qty,
           sellPriceSnapshot: sellPrice,
           costPriceSnapshot: costPrice,
-          grossProfit,
+          discountAmount,
           totalSell,
+          grossProfit,
         };
       });
 
-      await tx.saleItem.createMany({
-        data: saleItems,
-      });
+      await tx.saleItem.createMany({ data: saleItemsData });
 
-      const totalSell = saleItems.reduce(
-        (sum, item) => sum + Number(item.totalSell),
-        0,
+      // 8. Decrement stok semua produk
+      await Promise.all(
+        data.items.map((item) =>
+          tx.product.update({
+            where: { id: item.productId },
+            data: { stock: { decrement: item.qty } },
+          }),
+        ),
       );
 
-      // 6. Return complete sale with items
+      // 9. Return complete sale
       const completeSale = await tx.sale.findUnique({
         where: { id: sale.id },
         include: {
-          branch: {
-            select: { id: true, name: true },
-          },
-          createdBy: {
-            select: { id: true, name: true, email: true },
-          },
+          branch: { select: { id: true, name: true } },
+          createdBy: { select: { id: true, name: true } },
           items: {
             include: {
-              product: {
-                select: { id: true, name: true, unit: true },
-              },
+              product: { select: { id: true, name: true } },
             },
           },
         },
       });
+
+      const totalSell = saleItemsData.reduce(
+        (sum, item) => sum.plus(item.totalSell),
+        new Decimal(0),
+      );
 
       return {
         id: completeSale!.id,
         saleDate: completeSale!.saleDate,
         notes: completeSale!.notes,
         createdAt: completeSale!.createdAt,
+        customer: {
+          name: completeSale!.customerName,
+          address: completeSale!.customerAddress,
+          phone: completeSale!.customerPhone,
+        },
         branch: completeSale!.branch,
         createdBy: completeSale!.createdBy,
-        items: completeSale!.items.map(
-          ({ productId, saleId, ...item }) => item,
-        ),
         totalSell,
+        items: completeSale!.items.map(
+          ({ saleId, productId, ...item }) => item,
+        ),
       };
     });
   },
 
-  // Get Sales List with filtering and pagination
-  // async getSales(filter: GetSalesFilter, userRole: string, userId: string) {
-  //   const where: any = {};
-
-  //   // If karyawan, only show sales from their branch
-  //   if (userRole === "karyawan") {
-  //     const employeeBranch = await prisma.employeeBranch.findUnique({
-  //       where: { userId },
-  //     });
-
-  //     if (!employeeBranch) {
-  //       throw new Error("Karyawan belum di-assign ke cabang");
-  //     }
-
-  //     where.branchId = employeeBranch.branchId;
-  //   } else if (filter.branchId) {
-  //     // Owner bisa filter by branchId
-  //     where.branchId = filter.branchId;
-  //   }
-
-  //   // Filter by date range
-  //   if (filter.startDate) {
-  //     where.saleDate = { gte: filter.startDate };
-  //   }
-
-  //   if (filter.endDate) {
-  //     if (where.saleDate) {
-  //       where.saleDate.lte = filter.endDate;
-  //     } else {
-  //       where.saleDate = { lte: filter.endDate };
-  //     }
-  //   }
-
-  //   // Get total count for pagination
-  //   const total = await prisma.sale.count({ where });
-
-  //   // Get paginated results
-  //   const sales = await prisma.sale.findMany({
-  //     where,
-  //     include: {
-  //       branch: {
-  //         select: { id: true, name: true },
-  //       },
-  //       createdBy: {
-  //         select: { id: true, name: true, email: true },
-  //       },
-  //       items: {
-  //         include: {
-  //           product: {
-  //             select: { id: true, name: true, unit: true },
-  //           },
-  //         },
-  //       },
-  //     },
-  //     orderBy: { saleDate: "desc" },
-  //     skip: (filter.page - 1) * filter.limit,
-  //     take: filter.limit,
-  //   });
-
-  //   return {
-  //     data: sales.map((sale) => ({
-  //       id: sale.id,
-  //       saleDate: sale.saleDate,
-  //       notes: sale.notes,
-  //       createdAt: sale.createdAt,
-  //       branch: sale.branch,
-  //       createdBy: sale.createdBy,
-  //       items: sale.items.map(({ productId, saleId, ...item }) => item),
-  //     })),
-  //     meta: {
-  //       current_page: filter.page,
-  //       last_page: Math.ceil(total / filter.limit),
-  //       page_size: filter.limit,
-  //       total,
-  //     },
-  //   };
-  // },
-
-  async getSales(filter: GetSalesFilter, userRole: string, userId: string) {
-    const where: any = {};
-
-    if (userRole === "karyawan") {
-      const employeeBranch = await prisma.employeeBranch.findUnique({
-        where: { userId },
+  async cancelSale(id: string, branchId: string | null) {
+    return prisma.$transaction(async (tx) => {
+      const sale = await tx.sale.findUnique({
+        where: { id },
+        include: { items: true },
       });
-      if (!employeeBranch) {
-        throw new Error("Karyawan belum di-assign ke cabang");
+
+      if (!sale) throw new NotFoundError("Transaksi tidak ditemukan");
+
+      if (branchId && sale.branchId !== branchId) {
+        throw new ForbiddenError("Transaksi tidak milik cabang ini");
       }
-      where.branchId = employeeBranch.branchId;
-    } else if (filter.branchId) {
-      where.branchId = filter.branchId;
-    }
 
-    if (filter.startDate) {
-      where.saleDate = { gte: filter.startDate };
-    }
-    if (filter.endDate) {
-      if (where.saleDate) {
-        where.saleDate.lte = filter.endDate;
-      } else {
-        where.saleDate = { lte: filter.endDate };
+      if (sale.status === "CANCELLED") {
+        throw new BadRequestError("Transaksi sudah dibatalkan");
       }
-    }
 
-    const total = await prisma.sale.count({ where });
+      const hoursDiff =
+        (new Date().getTime() - new Date(sale.saleDate).getTime()) /
+        (1000 * 60 * 60);
 
-    const sales = await prisma.sale.findMany({
-      where,
-      include: {
-        branch: {
-          select: { id: true, name: true },
+      if (hoursDiff > 24) {
+        throw new BadRequestError(
+          "Transaksi hanya bisa dibatalkan maksimal 24 jam setelah transaksi",
+        );
+      }
+
+      // kembalikan stok semua item
+      await Promise.all(
+        sale.items.map((item) =>
+          tx.product.update({
+            where: { id: item.productId },
+            data: { stock: { increment: item.qty } },
+          }),
+        ),
+      );
+
+      return tx.sale.update({
+        where: { id },
+        data: { status: "CANCELLED" },
+      });
+    });
+  },
+
+  async getSales(branchId: string | null, query: GetSalesQueryDTO) {
+    const page = query.page ?? 1;
+    const pageSize = query.limit ?? 10;
+    const skip = (page - 1) * pageSize;
+
+    const where = {
+      ...(branchId && { branchId }),
+      ...(query.branchId && !branchId && { branchId: query.branchId }),
+      ...(query.search && {
+        customerName: { contains: query.search },
+      }),
+      ...(query.startDate || query.endDate
+        ? {
+            saleDate: {
+              ...(query.startDate && { gte: query.startDate }),
+              ...(query.endDate && {
+                lte: new Date(
+                  new Date(query.endDate).setHours(23, 59, 59, 999),
+                ),
+              }),
+            },
+          }
+        : {}),
+    };
+
+    const [data, total] = await prisma.$transaction([
+      prisma.sale.findMany({
+        where,
+        skip,
+        take: pageSize,
+        orderBy: { saleDate: "desc" },
+        include: {
+          branch: { select: { id: true, name: true } },
+          createdBy: { select: { id: true, name: true } },
+          items: { select: { totalSell: true } }, // hanya untuk kalkulasi
         },
-        createdBy: {
-          select: { id: true, name: true },
+      }),
+      prisma.sale.count({ where }),
+    ]);
+
+    const sales = data.map((sale) => {
+      const totalSell = sale.items.reduce(
+        (sum, item) => sum.plus(item.totalSell),
+        new Decimal(0),
+      );
+
+      return {
+        id: sale.id,
+        saleDate: sale.saleDate,
+        status: sale.status,
+        notes: sale.notes,
+        createdAt: sale.createdAt,
+        customer: {
+          name: sale.customerName,
+          // address: sale.customerAddress,
+          // phone: sale.customerPhone,
         },
-        items: {
-          select: {
-            totalSell: true,
-            grossProfit: true,
-          },
-        },
-      },
-      orderBy: { saleDate: "desc" },
-      skip: (filter.page - 1) * filter.limit,
-      take: filter.limit,
+        branch: sale.branch,
+        createdBy: sale.createdBy,
+        totalSell,
+      };
     });
 
     return {
-      data: sales.map((sale) => {
-        // Hitung aggregate dari items
-        const totalSell = sale.items.reduce(
-          (sum, item) => sum + Number(item.totalSell),
-          0,
-        );
-        const grossProfit = sale.items.reduce(
-          (sum, item) => sum + Number(item.grossProfit),
-          0,
-        );
-
-        return {
-          id: sale.id,
-          saleDate: sale.saleDate,
-          notes: sale.notes,
-          createdAt: sale.createdAt,
-          branch: sale.branch,
-          createdBy: sale.createdBy,
-          totalSell,
-          grossProfit,
-          itemCount: sale.items.length,
-        };
-      }),
       meta: {
-        current_page: filter.page,
-        last_page: Math.ceil(total / filter.limit),
-        page_size: filter.limit,
+        current_page: page,
+        last_page: Math.max(1, Math.ceil(total / pageSize)),
+        page_size: pageSize,
         total,
       },
+      data: sales,
     };
   },
 
-  // Get Sale Detail by ID
-  async getSaleById(saleId: string, userRole: string, userId: string) {
+  async getSaleDetail(id: string, branchId: string | null) {
     const sale = await prisma.sale.findUnique({
-      where: { id: saleId },
+      where: { id },
       include: {
-        branch: {
-          select: { id: true, name: true },
-        },
-        createdBy: {
-          select: { id: true, name: true, email: true },
-        },
+        branch: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, name: true } },
         items: {
           include: {
-            product: {
-              select: { id: true, name: true, unit: true },
-            },
+            product: { select: { id: true, name: true } },
           },
         },
       },
     });
 
-    if (!sale) {
-      throw new Error("Data penjualan tidak ditemukan");
+    if (!sale) throw new NotFoundError("Transaksi tidak ditemukan");
+
+    if (branchId && sale.branchId !== branchId) {
+      throw new ForbiddenError("Transaksi tidak milik cabang ini");
     }
 
-    // Validate access: karyawan only see sales from their branch
-    if (userRole === "karyawan") {
-      const employeeBranch = await prisma.employeeBranch.findUnique({
-        where: { userId },
-      });
+    const totalSell = sale.items.reduce(
+      (sum, item) => sum.plus(item.totalSell),
+      new Decimal(0),
+    );
 
-      if (!employeeBranch || employeeBranch.branchId !== sale.branchId) {
-        throw new Error("Anda tidak memiliki akses ke data penjualan ini");
-      }
-    }
+    const totalGrossProfit = sale.items.reduce(
+      (sum, item) => sum.plus(item.grossProfit),
+      new Decimal(0),
+    );
 
     return {
       id: sale.id,
       saleDate: sale.saleDate,
+      status: sale.status,
       notes: sale.notes,
       createdAt: sale.createdAt,
+      customer: {
+        name: sale.customerName,
+        address: sale.customerAddress,
+        phone: sale.customerPhone,
+      },
       branch: sale.branch,
       createdBy: sale.createdBy,
-      items: sale.items.map(({ productId, saleId, ...item }) => ({
-        ...item,
-        qty: Number(item.qty),
-        sellPriceSnapshot: Number(item.sellPriceSnapshot),
-        costPriceSnapshot: Number(item.costPriceSnapshot),
-        totalSell: item.totalSell ? Number(item.totalSell) : null,
-        grossProfit: Number(item.grossProfit),
-      })),
+      totalSell,
+      totalGrossProfit,
+      items: sale.items.map(({ saleId, productId, ...item }) => item),
     };
   },
 
-  // Get Sales Summary (total items, total gross profit, etc)
   async getSalesSummary(
-    filter: GetSalesFilter,
-    userRole: string,
-    userId: string,
+    branchId: string | null,
+    query: GetSalesSummaryQueryDTO,
   ) {
-    const where: any = {};
+    const now = new Date();
 
-    // If karyawan, only show sales from their branch
-    if (userRole === "karyawan") {
-      const employeeBranch = await prisma.employeeBranch.findUnique({
-        where: { userId },
-      });
+    const startDate =
+      query.startDate ?? new Date(now.getFullYear(), now.getMonth(), 1);
+    const endDate = query.endDate
+      ? new Date(new Date(query.endDate).setHours(23, 59, 59, 999))
+      : now;
 
-      if (!employeeBranch) {
-        throw new Error("Karyawan belum di-assign ke cabang");
-      }
+    const where = {
+      saleDate: { gte: startDate, lte: endDate },
+      ...(branchId && { branchId }),
+      ...(!branchId && query.branchId && { branchId: query.branchId }),
+    };
 
-      where.branchId = employeeBranch.branchId;
-    } else if (filter.branchId) {
-      // Owner bisa filter by branchId
-      where.branchId = filter.branchId;
-    }
-
-    // Filter by date range
-    if (filter.startDate) {
-      where.saleDate = { gte: filter.startDate };
-    }
-
-    if (filter.endDate) {
-      if (where.saleDate) {
-        where.saleDate.lte = filter.endDate;
-      } else {
-        where.saleDate = { lte: filter.endDate };
-      }
-    }
-
-    const summary = await prisma.saleItem.aggregate({
-      where: { sale: where },
-      _sum: {
-        qty: true,
-        sellPriceSnapshot: true,
-        costPriceSnapshot: true,
-        grossProfit: true,
-      },
-    });
-
-    const totalSales = await prisma.sale.count({ where });
+    const [totalTransaksi, totalTransaksiCancelled, itemsAggregate] =
+      await prisma.$transaction([
+        prisma.sale.count({
+          where: { ...where, status: "COMPLETED" },
+        }),
+        prisma.sale.count({
+          where: { ...where, status: "CANCELLED" },
+        }),
+        prisma.saleItem.aggregate({
+          where: {
+            sale: { ...where, status: "COMPLETED" },
+          },
+          _sum: {
+            totalSell: true,
+            grossProfit: true,
+          },
+        }),
+      ]);
 
     return {
-      totalSales,
-      totalItems: summary._sum.qty ?? 0,
-      totalRevenue: summary._sum.sellPriceSnapshot ?? 0,
-      totalCost: summary._sum.costPriceSnapshot ?? 0,
-      totalGrossProfit: summary._sum.grossProfit ?? 0,
+      period: {
+        startDate,
+        endDate,
+      },
+      totalTransaksi,
+      totalTransaksiCancelled,
+      totalRevenue: itemsAggregate._sum.totalSell ?? new Decimal(0),
+      totalGrossProfit: itemsAggregate._sum.grossProfit ?? new Decimal(0),
     };
+  },
+
+  async getSalesSummaryMonthly(
+    branchId: string | null,
+    query: GetSalesSummaryMonthlyQueryDTO,
+  ) {
+    const now = new Date();
+    const months = [];
+
+    // generate N bulan terakhir
+    for (let i = query.last - 1; i >= 0; i--) {
+      const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const startOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
+      const endOfMonth =
+        i === 0
+          ? now // bulan berjalan sampai hari ini
+          : new Date(
+              date.getFullYear(),
+              date.getMonth() + 1,
+              0,
+              23,
+              59,
+              59,
+              999,
+            );
+
+      months.push({ startOfMonth, endOfMonth });
+    }
+
+    const where = {
+      ...(branchId && { branchId }),
+      ...(!branchId && query.branchId && { branchId: query.branchId }),
+      status: "COMPLETED" as const,
+    };
+
+    // query semua bulan sekaligus dalam satu transaction
+    const results = await prisma.$transaction(
+      months.map(({ startOfMonth, endOfMonth }) =>
+        prisma.saleItem.aggregate({
+          where: {
+            sale: {
+              ...where,
+              saleDate: { gte: startOfMonth, lte: endOfMonth },
+            },
+          },
+          _sum: {
+            totalSell: true,
+            grossProfit: true,
+          },
+        }),
+      ),
+    );
+
+    return months.map(({ startOfMonth }, index) => ({
+      period: `${startOfMonth.getFullYear()}-${String(startOfMonth.getMonth() + 1).padStart(2, "0")}`,
+      totalRevenue: results[index]?._sum.totalSell ?? new Decimal(0),
+      totalGrossProfit: results[index]?._sum.grossProfit ?? new Decimal(0),
+    }));
   },
 };
