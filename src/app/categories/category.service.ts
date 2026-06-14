@@ -105,7 +105,7 @@ export const categoryService = {
         updatedAt: true,
         deletedAt: true,
         branch: {
-          select: { name: true },
+          select: { id: true, name: true },
         },
       },
       orderBy: { createdAt: "desc" },
