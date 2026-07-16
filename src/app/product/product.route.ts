@@ -59,11 +59,11 @@ productRouter.delete(
 //   productController.activateProduct,
 // );
 
-// productRouter.get(
-//   "/:id",
-//   authenticate,
-//   requireRole(["owner", "karyawan"]),
-//   productController.getProductById,
-// );
+productRouter.get(
+  "/:id",
+  authenticate,
+  requireRole(["owner", "karyawan"]),
+  productController.getProductById,
+);
 
 export default productRouter;

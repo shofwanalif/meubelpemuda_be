@@ -199,6 +199,7 @@ model Sale {
   branch      Branch @relation(fields: [branchId], references: [id])
   createdById String
   createdBy   User   @relation(fields: [createdById], references: [id])
+  deletedAt   DateTime?
 
   // Relations
   items SaleItem[]

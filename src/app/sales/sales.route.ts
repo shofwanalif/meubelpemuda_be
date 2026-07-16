@@ -59,4 +59,11 @@ salesRouter.get(
   salesController.getSaleDetail,
 );
 
+salesRouter.delete(
+  "/delete/:id",
+  salesController.deleteSale,
+  authenticate,
+  requireRole(["owner"]),
+);
+
 export { salesRouter };
