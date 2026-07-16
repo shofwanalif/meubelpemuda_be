@@ -6,6 +6,7 @@ import {
   ForbiddenError,
   NotFoundError,
   ConflictError,
+  ValidationError,
 } from "../helper/errors";
 
 const errorMap = [
@@ -24,7 +25,9 @@ export function errorHandler(
 ) {
   const match = errorMap.find((e) => error instanceof e.type);
   if (match) {
-    return res.status(match.status).json({ message: error.message });
+    const extra =
+      error instanceof ValidationError ? { errors: error.errors } : {};
+    return res.status(match.status).json({ message: error.message, ...extra });
   }
 
   logger.error(error);

@@ -32,3 +32,13 @@ export class ConflictError extends Error {
     this.name = "ConflictError";
   }
 }
+
+export class ValidationError extends BadRequestError {
+  constructor(
+    message: string,
+    public errors: Record<string, string[] | undefined>,
+  ) {
+    super(message);
+    this.name = "ValidationError";
+  }
+}

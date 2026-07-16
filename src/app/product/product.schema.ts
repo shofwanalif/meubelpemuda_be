@@ -4,7 +4,7 @@ export const CreateProductSchema = z.object({
   branchId: z.string().optional(),
   name: z.string().min(1, "Nama produk wajib diisi"),
   description: z.string().optional(),
-  stock: z.number().int().positive("Stock harus lebih dari 0"),
+  stock: z.number().int().min(0, "Stock tidak boleh kurang dari 0"),
   categoryId: z.string().min(1, "Kategori harus diisi"),
   costPrice: z.number().positive("Harga modal harus lebih dari 0"),
   sellPrice: z.number().positive("Harga jual harus lebih dari 0"),
