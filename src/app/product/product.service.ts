@@ -209,21 +209,31 @@ export const productService = {
     };
   },
 
-  // SIMPAN BUAT FITUR HISTORY HARGA
+  async getProductById(productId: string) {
+    const product = await prisma.product.findUnique({
+      where: { id: productId, deletedAt: null },
+      include: {
+        branch: {
+          select: { id: true, name: true, address: true },
+        },
+        category: {
+          select: { id: true, name: true, isActive: true },
+        },
+        prices: {
+          orderBy: { effectiveFrom: "desc" },
+          include: {
+            updatedBy: {
+              select: { id: true, name: true },
+            },
+          },
+        },
+      },
+    });
 
-  // async getProductById(productId: string) {
-  //   return prisma.product.findUnique({
-  //     where: { id: productId },
-  //     include: {
-  //       prices: {
-  //         orderBy: {
-  //           effectiveFrom: "desc",
-  //         },
-  //         include: {
-  //           branch: { select: { id: true, name: true } },
-  //         },
-  //       },
-  //     },
-  //   });
-  // },
+    if (!product) {
+      throw new NotFoundError("Produk tidak ditemukan");
+    }
+
+    return product;
+  },
 };

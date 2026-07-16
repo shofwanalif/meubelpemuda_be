@@ -103,4 +103,18 @@ export const salesController = {
       next(error);
     }
   },
+
+  // tidak butuh resolveBranchId katena delete sale bisa dilakukan oleh owner, dan owner bisa menghapus sale dari branch manapun
+  async deleteSale(
+    req: Request<{ id: string }>,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      await salesService.deleteSale(req.params.id);
+      return res.status(200).json({ message: "Transaksi berhasil dihapus" });
+    } catch (error) {
+      next(error);
+    }
+  },
 };

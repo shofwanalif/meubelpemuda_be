@@ -4,7 +4,9 @@ node_modules/*
 .env.*
 /dist/
 
-SALES_API_DOCS.md
+*.md
+
 TECHNICAL_NOTES.ts
 TESTING_EXAMPLES.ts
-SALES_IMPLEMENTATION_SUMMARY.md
+
+catatan.txt

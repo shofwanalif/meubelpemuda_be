@@ -234,6 +234,7 @@ export const salesService = {
             },
           }
         : {}),
+      deletedAt: null,
     };
 
     const [data, total] = await prisma.$transaction([
@@ -350,6 +351,7 @@ export const salesService = {
       saleDate: { gte: startDate, lte: endDate },
       ...(branchId && { branchId }),
       ...(!branchId && query.branchId && { branchId: query.branchId }),
+      deletedAt: null,
     };
 
     const [totalTransaksi, totalTransaksiCancelled, itemsAggregate] =
@@ -414,6 +416,7 @@ export const salesService = {
       ...(branchId && { branchId }),
       ...(!branchId && query.branchId && { branchId: query.branchId }),
       status: "COMPLETED" as const,
+      deletedAt: null,
     };
 
     // query semua bulan sekaligus dalam satu transaction
@@ -439,5 +442,46 @@ export const salesService = {
       totalRevenue: results[index]?._sum.totalSell ?? new Decimal(0),
       totalGrossProfit: results[index]?._sum.grossProfit ?? new Decimal(0),
     }));
+  },
+
+  // cuma butuh id untuk soft delete, karena data transaksi tidak boleh hilang.
+  // alasan lain karena delete hanya bisa dilakukan oleh owner, jadi tidak perlu validasi branchId.
+  async deleteSale(id: string) {
+    const sale = await prisma.sale.findUnique({
+      where: { id, deletedAt: null, status: "CANCELLED" },
+    });
+
+    if (!sale)
+      throw new NotFoundError("Transaksi ini tidak berstatus dibatalkan");
+
+    await prisma.sale.update({
+      where: { id },
+      data: { deletedAt: new Date() },
+    });
+
+    // VERSI LAIN MENGGUNAKAN TRANSACTION UNTUK MENGEMBALIKAN STOK PRODUK
+    // return prisma.$transaction(async (tx) => {
+    //   const sale = await tx.sale.findUnique({
+    //     where: { id, deletedAt: null, status: "CANCELLED" },
+    //     include: { items: true },
+    //   });
+
+    //   if (!sale)
+    //     throw new NotFoundError("Transaksi ini tidak berstatus dibatalkan");
+
+    //   await Promise.all(
+    //     sale.items.map((item) =>
+    //       tx.product.update({
+    //         where: { id: item.productId },
+    //         data: { stock: { increment: item.qty } },
+    //       }),
+    //     ),
+    //   );
+
+    //   return tx.sale.update({
+    //     where: { id },
+    //     data: { deletedAt: new Date() },
+    //   });
+    // });
   },
 };

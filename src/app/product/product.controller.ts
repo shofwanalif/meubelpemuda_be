@@ -91,25 +91,22 @@ export const productController = {
     }
   },
 
-  // async getProductById(req: Request<{ id: string }>, res: Response) {
-  //   try {
-  //     const productId = req.params.id;
-  //     if (!productId) {
-  //       return res.status(400).json({ message: "Product ID harus disertakan" });
-  //     }
-
-  //     const product = await productService.getProductById(productId);
-  //     return res.status(200).json({ data: product });
-  //   } catch (error) {
-  //     logger.error("Error getting product by ID: ", error);
-  //     if (
-  //       error instanceof Error &&
-  //       error.message === "Produk tidak ditemukan"
-  //     ) {
-  //       return res.status(404).json({ message: error.message });
-  //     }
-  //     return res.status(500).json({ message: "Internal server error" });
-  //   }
-  // },
-  //
+  async getProductById(
+    req: Request<{ id: string }>,
+    res: Response,
+    next: NextFunction,
+  ) {
+    try {
+      const result = await productService.getProductById(req.params.id);
+      return res.status(200).json({
+        message: "Detail produk berhasil diambil",
+        data: result,
+      });
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        return res.status(404).json({ message: error.message });
+      }
+      next(error);
+    }
+  },
 };
